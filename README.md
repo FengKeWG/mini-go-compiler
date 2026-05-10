@@ -1,6 +1,6 @@
 # MiniGo 词法分析模块
 
-这是编译原理课程设计的前三阶段代码，目前实现了 **MiniGo 词法分析器**、**递归下降语法分析器** 和 **语义分析/四元式生成**。
+这是编译原理课程设计代码，目前实现了 **MiniGo 词法分析器**、**递归下降语法分析器**、**语义分析/四元式生成** 和 **基础四元式优化**。
 
 代码按 Go 项目习惯分成 `cmd` 和 `internal`，但文件数量控制得比较少：
 
@@ -10,11 +10,12 @@
 - `internal/parser/parser.go`：递归下降语法分析
 - `internal/semantic/semantic.go`：符号表、活动记录地址、四元式生成
 - `internal/semantic/printer.go`：打印语义分析结果
+- `internal/optimizer/optimizer.go`：基本块划分和基础四元式优化
+- `internal/optimizer/printer.go`：打印优化结果
 - 不使用 `interface`
 - 不使用 AST
-- 不使用递归下降
 - 不分复杂包
-- 只输出词法分析阶段需要的表和 Token 序列
+- 输出词法分析、语法分析、语义分析和优化阶段结果
 
 ## 运行
 
@@ -45,5 +46,9 @@ examples/basic.mg
 - 函数单返回值和 return 类型检查
 - 数组声明，例如 `var scores [10]int;`
 - 结构体声明，例如 `type Student struct { age int; }`
+- 基本块划分
+- 常量表达式节省
+- 公共子表达式节省
+- 删除无用赋值
 
-后面的优化、目标代码生成先不写，等语义分析稳定后再加。
+后面的目标代码生成先不写，等优化阶段稳定后再加。

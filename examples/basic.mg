@@ -21,6 +21,9 @@ func main() int {
     /* 整数、小数、字符、字符串常量 */
     a = 2;
     b = 5;
+    a = 2 + 3;
+    b = a + 1;
+    pair = a + 1;
     rate = 3.14;
     ch = 'x';
     msg = "hello";

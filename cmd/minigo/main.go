@@ -5,12 +5,13 @@ import (
 	"os"
 
 	"minigo/internal/lexer"
+	"minigo/internal/optimizer"
 	"minigo/internal/parser"
 	"minigo/internal/semantic"
 )
 
 func main() {
-	// 默认读取示例程序，也可以从命令行传入源程序路径。
+	// 默认读取示例程序，也可以从命令行传入源程序路径
 	filename := "examples/basic.mg"
 	if len(os.Args) >= 2 {
 		filename = os.Args[1]
@@ -22,17 +23,28 @@ func main() {
 		return
 	}
 
-	// 第一阶段：词法分析，生成 Token 序列、标识符表、常数表和错误信息。
+	// 第一阶段：词法分析，生成 Token 序列、标识符表、常数表和错误信息
 	lexResult := lexer.Scan(string(sourceBytes))
 	lexer.PrintResult(filename, lexResult)
-
-	// 第二阶段：语法分析。只有词法分析无错误时才继续做递归下降分析。
-	if len(lexResult.Errors) == 0 {
-		parseResult := parser.Parse(lexResult.Tokens)
-		parser.PrintResult(parseResult)
-		if len(parseResult.Errors) == 0 {
-			semanticResult := semantic.Analyze(lexResult.Tokens)
-			semantic.PrintResult(semanticResult)
-		}
+	if len(lexResult.Errors) > 0 {
+		return
 	}
+
+	// 第二阶段：语法分析，使用递归下降子程序检查语法
+	parseResult := parser.Parse(lexResult.Tokens)
+	parser.PrintResult(parseResult)
+	if len(parseResult.Errors) > 0 {
+		return
+	}
+
+	// 第三阶段：语义分析，生成符号表、活动记录和四元式
+	semanticResult := semantic.Analyze(lexResult.Tokens)
+	semantic.PrintResult(semanticResult)
+	if len(semanticResult.Errors) > 0 {
+		return
+	}
+
+	// 第四阶段：基础优化，对四元式做基本块划分和简单优化
+	optimizeResult := optimizer.Optimize(semanticResult.Quads)
+	optimizer.PrintResult(optimizeResult)
 }
