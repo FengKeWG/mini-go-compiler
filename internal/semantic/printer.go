@@ -119,12 +119,17 @@ func printRinfl(symbols []Symbol) {
 // printPfinfl 输出函数表，对应 PPT 中的 PFINFL。
 func printPfinfl(symbols []Symbol) {
 	fmt.Println("函数表 PFINFL:")
-	fmt.Printf("  %-12s %-8s %-8s %-8s %-12s %-8s\n", "函数名", "LEVEL", "OFF", "FN", "ENTRY", "RETURN")
+	fmt.Printf("  %-12s %-8s %-8s %-8s %-12s %-8s %-18s\n", "函数名", "LEVEL", "OFF", "FN", "ENTRY", "RETURN", "PARAM")
 	for _, sym := range symbols {
 		if sym.Category != "f" {
 			continue
 		}
-		fmt.Printf("  %-12s %-8d %-8d %-8d %-12s %-8s\n", sym.Name, 0, localVarStartAddr, 0, sym.Name, sym.Type)
+		params := sym.Value
+		if params == "" {
+			params = "-"
+		}
+		fmt.Printf("  %-12s %-8d %-8d %-8d %-12s %-8s %-18s\n",
+			sym.Name, 0, localVarStartAddr, countParams(sym.Value), sym.Name, sym.Type, params)
 	}
 	fmt.Println()
 }
@@ -190,6 +195,8 @@ func printActivityRecord(symbols []Symbol) {
 			area := "局部变量"
 			if sym.Category == "t" {
 				area = "临时变量"
+			} else if sym.Category == "p" {
+				area = "形式参数"
 			}
 			printVallRow(fmt.Sprintf("%d", sym.Addr), sym.Name, sym.Type, area)
 		}
@@ -319,6 +326,13 @@ func parseField(field string) (string, string, bool) {
 		return "", "", false
 	}
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+}
+
+func countParams(params string) int {
+	if strings.TrimSpace(params) == "" {
+		return 0
+	}
+	return len(strings.Split(params, ","))
 }
 
 // printVallRow 按显示宽度输出一行，避免中文占两个字符宽度导致列歪。

@@ -52,6 +52,16 @@ type typeInfo struct {
 	Fields map[string]string
 }
 
+type paramInfo struct {
+	Name string
+	Type string
+}
+
+type functionInfo struct {
+	ReturnType string
+	Params     []paramInfo
+}
+
 // Analyzer 是带语义动作的递归下降分析器。
 // 它复用语法分析的结构，在识别语法成分时填写符号表并生成四元式。
 type Analyzer struct {
@@ -61,6 +71,7 @@ type Analyzer struct {
 	symbols     []Symbol
 	symbolIndex map[string]int
 	types       map[string]typeInfo
+	functions   map[string]functionInfo
 	offset      int
 
 	quads      []Quad
@@ -83,6 +94,7 @@ func Analyze(tokens []lexer.Token) Result {
 		tokens:      tokens,
 		symbolIndex: map[string]int{},
 		types:       map[string]typeInfo{},
+		functions:   map[string]functionInfo{},
 		offset:      localVarStartAddr,
 	}
 	a.parseProgram()
@@ -100,22 +112,33 @@ func (a *Analyzer) parseProgram() {
 	}
 }
 
-// <函数定义> -> func <标识符> ( ) <返回类型> <复合语句>
+// <函数定义> -> func <标识符> ( <参数列表> ) <返回类型> <复合语句>
 func (a *Analyzer) parseFuncDecl() {
 	a.expectKeyword("func")
 	nameTok := a.expectKind("i", "函数名")
-	a.expectText("(")
-	a.expectText(")")
-	returnType := a.parseReturnType()
-	a.enterSymbol(nameTok.Text, returnType, "f", "")
-	a.emit("program", nameTok.Text, "_", "_")
 
 	oldFuncName := a.currentFuncName
 	oldFuncReturn := a.currentFuncReturn
 	oldFuncHasReturn := a.currentFuncHasReturn
+	oldOffset := a.offset
+
 	a.currentFuncName = nameTok.Text
+	a.offset = localVarStartAddr
+
+	a.expectText("(")
+	params := a.parseParamList()
+	a.expectText(")")
+	returnType := a.parseReturnType()
+	a.functions[nameTok.Text] = functionInfo{ReturnType: returnType, Params: params}
+	a.enterSymbol(nameTok.Text, returnType, "f", formatParams(params))
+	a.emit("program", nameTok.Text, "_", "_")
+
 	a.currentFuncReturn = returnType
 	a.currentFuncHasReturn = false
+
+	for _, param := range params {
+		a.enterSymbol(param.Name, param.Type, "p", "")
+	}
 
 	a.parseBlock()
 	if returnType != "void" && !a.currentFuncHasReturn {
@@ -125,7 +148,28 @@ func (a *Analyzer) parseFuncDecl() {
 	a.currentFuncName = oldFuncName
 	a.currentFuncReturn = oldFuncReturn
 	a.currentFuncHasReturn = oldFuncHasReturn
+	a.offset = oldOffset
 	a.emit("end", nameTok.Text, "_", "_")
+}
+
+// <参数列表> -> <参数> { , <参数> } | ε
+func (a *Analyzer) parseParamList() []paramInfo {
+	params := []paramInfo{}
+	if a.checkText(")") {
+		return params
+	}
+	params = append(params, a.parseParam())
+	for a.matchText(",") {
+		params = append(params, a.parseParam())
+	}
+	return params
+}
+
+// <参数> -> <标识符> <类型>
+func (a *Analyzer) parseParam() paramInfo {
+	nameTok := a.expectKind("i", "参数名")
+	typ := a.parseType()
+	return paramInfo{Name: nameTok.Text, Type: typ}
 }
 
 // <复合语句> -> { <语句表> }
@@ -279,6 +323,12 @@ func (a *Analyzer) parseReturnType() string {
 
 // <赋值语句> -> <左值> <赋值运算符> <表达式> ;
 func (a *Analyzer) parseIDStartStmt() {
+	if a.nextText("(") {
+		a.parseCallExpr()
+		a.expectText(";")
+		return
+	}
+
 	left := a.parseDesignator(false)
 
 	assignOp := ""
@@ -520,9 +570,12 @@ func (a *Analyzer) parseUnary() operand {
 	return a.parsePrimary()
 }
 
-// <基本表达式> -> <标识符> | <常数> | true | false | ( <表达式> )
+// <基本表达式> -> <标识符> | <函数调用> | <常数> | true | false | ( <表达式> )
 func (a *Analyzer) parsePrimary() operand {
 	if a.checkKind("i") {
+		if a.nextText("(") {
+			return a.parseCallExpr()
+		}
 		return a.parseDesignator(true)
 	}
 	if a.checkKind("c") {
@@ -544,6 +597,54 @@ func (a *Analyzer) parsePrimary() operand {
 	a.addError("缺少表达式")
 	a.advance()
 	return operand{Name: "?", Type: "unknown"}
+}
+
+// <函数调用> -> <标识符> ( <实参列表> )
+func (a *Analyzer) parseCallExpr() operand {
+	nameTok := a.expectKind("i", "函数名")
+	a.expectText("(")
+	args := a.parseArgumentList()
+	a.expectText(")")
+
+	info, ok := a.functions[nameTok.Text]
+	if !ok {
+		a.addError("未声明的函数 " + nameTok.Text)
+		return operand{Name: "?", Type: "unknown"}
+	}
+	if len(args) != len(info.Params) {
+		a.addError(fmt.Sprintf("函数 %s 参数个数不匹配：需要 %d 个，实际 %d 个",
+			nameTok.Text, len(info.Params), len(args)))
+	} else {
+		for i, arg := range args {
+			if !canAssign(info.Params[i].Type, arg.Type) {
+				a.addError(fmt.Sprintf("函数 %s 第 %d 个参数类型不匹配：%s <- %s",
+					nameTok.Text, i+1, info.Params[i].Type, arg.Type))
+			}
+		}
+	}
+
+	for i, arg := range args {
+		a.emit("param", arg.Name, strconv.Itoa(i+1), "_")
+	}
+	result := "_"
+	if info.ReturnType != "void" {
+		result = a.newTemp(info.ReturnType).Name
+	}
+	a.emit("call", nameTok.Text, strconv.Itoa(len(args)), result)
+	return operand{Name: result, Type: info.ReturnType}
+}
+
+// <实参列表> -> <表达式> { , <表达式> } | ε
+func (a *Analyzer) parseArgumentList() []operand {
+	args := []operand{}
+	if a.checkText(")") {
+		return args
+	}
+	args = append(args, a.parseExpr())
+	for a.matchText(",") {
+		args = append(args, a.parseExpr())
+	}
+	return args
 }
 
 func (a *Analyzer) makeBinary(op string, left operand, right operand) operand {
@@ -572,7 +673,8 @@ func (a *Analyzer) enterSymbol(name string, typ string, category string, value s
 	if name == "" {
 		return Symbol{}
 	}
-	if _, ok := a.symbolIndex[name]; ok {
+	key := a.symbolKey(name, category)
+	if _, ok := a.symbolIndex[key]; ok {
 		a.addError("重复声明标识符 " + name)
 		return Symbol{}
 	}
@@ -582,14 +684,19 @@ func (a *Analyzer) enterSymbol(name string, typ string, category string, value s
 		length = 0
 	}
 	addr := -1
-	if category == "v" || category == "t" {
+	if category == "v" || category == "p" || category == "t" {
 		addr = a.offset
 		a.offset += length
 	}
 
+	displayName := name
+	if category != "f" && category != "type" && a.currentFuncName != "" {
+		displayName = a.currentFuncName + "." + name
+	}
+
 	sym := Symbol{
 		Index:    len(a.symbols) + 1,
-		Name:     name,
+		Name:     displayName,
 		Type:     typ,
 		Category: category,
 		Addr:     addr,
@@ -597,16 +704,29 @@ func (a *Analyzer) enterSymbol(name string, typ string, category string, value s
 		Value:    value,
 	}
 	a.symbols = append(a.symbols, sym)
-	a.symbolIndex[name] = sym.Index
+	a.symbolIndex[key] = sym.Index
 	return sym
 }
 
 func (a *Analyzer) lookupSymbol(name string) (Symbol, bool) {
-	index, ok := a.symbolIndex[name]
-	if !ok {
-		return Symbol{}, false
+	if a.currentFuncName != "" {
+		index, ok := a.symbolIndex[a.currentFuncName+"."+name]
+		if ok {
+			return a.symbols[index-1], true
+		}
 	}
-	return a.symbols[index-1], true
+	index, ok := a.symbolIndex[name]
+	if ok {
+		return a.symbols[index-1], true
+	}
+	return Symbol{}, false
+}
+
+func (a *Analyzer) symbolKey(name string, category string) string {
+	if category == "f" || category == "type" || a.currentFuncName == "" {
+		return name
+	}
+	return a.currentFuncName + "." + name
 }
 
 func (a *Analyzer) newTemp(typ string) operand {
@@ -659,6 +779,13 @@ func (a *Analyzer) checkText(text string) bool {
 func (a *Analyzer) checkKeyword(word string) bool {
 	tok := a.current()
 	return tok.Kind == "k" && tok.Text == word
+}
+
+func (a *Analyzer) nextText(text string) bool {
+	if a.pos+1 >= len(a.tokens) {
+		return false
+	}
+	return a.tokens[a.pos+1].Text == text
 }
 
 func (a *Analyzer) isTypeKeyword() bool {
@@ -776,6 +903,14 @@ func formatFields(fieldNames []string, fields map[string]string) string {
 	parts := []string{}
 	for _, name := range fieldNames {
 		parts = append(parts, name+":"+fields[name])
+	}
+	return strings.Join(parts, ",")
+}
+
+func formatParams(params []paramInfo) string {
+	parts := []string{}
+	for _, param := range params {
+		parts = append(parts, param.Name+":"+param.Type)
 	}
 	return strings.Join(parts, ",")
 }

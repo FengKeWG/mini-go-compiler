@@ -1,3 +1,9 @@
+func add(x int, y int) int {
+    var result int;
+    result = x + y;
+    return result;
+}
+
 func main() int {
     /* 结构体类型声明 */
     type Student struct {
@@ -24,6 +30,7 @@ func main() int {
     a = 2 + 3;
     b = a + 1;
     pair = a + 1;
+    pair = add(a, b);
     rate = 3.14;
     ch = 'x';
     msg = "hello";
@@ -61,6 +68,7 @@ func main() int {
 
     /* for 条件循环 */
     for a > 0 {
+        pair = limit + 1;
         a = a - 1;
         continue;
     }

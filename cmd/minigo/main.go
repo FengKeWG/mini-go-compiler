@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"minigo/internal/codegen"
 	"minigo/internal/lexer"
 	"minigo/internal/optimizer"
 	"minigo/internal/parser"
@@ -47,4 +48,8 @@ func main() {
 	// 第四阶段：基础优化，对四元式做基本块划分和简单优化
 	optimizeResult := optimizer.Optimize(semanticResult.Quads)
 	optimizer.PrintResult(optimizeResult)
+
+	// 第五阶段：目标代码生成，输出活跃信息和目标指令序列
+	codegenResult := codegen.Generate(optimizeResult.Optimized)
+	codegen.PrintResult(codegenResult)
 }

@@ -51,14 +51,32 @@ func (p *Parser) parseProgram() {
 	}
 }
 
-// <函数定义> -> func <标识符> ( ) <返回类型> <复合语句>
+// <函数定义> -> func <标识符> ( <参数列表> ) <返回类型> <复合语句>
 func (p *Parser) parseFuncDecl() {
 	p.expectKeyword("func")
 	p.expectKind("i", "函数名")
 	p.expectText("(")
+	p.parseParamList()
 	p.expectText(")")
 	p.parseReturnType()
 	p.parseBlock()
+}
+
+// <参数列表> -> <参数> { , <参数> } | ε
+func (p *Parser) parseParamList() {
+	if p.checkText(")") {
+		return
+	}
+	p.parseParam()
+	for p.matchText(",") {
+		p.parseParam()
+	}
+}
+
+// <参数> -> <标识符> <类型>
+func (p *Parser) parseParam() {
+	p.expectKind("i", "参数名")
+	p.parseType()
 }
 
 // <复合语句> -> { <语句表> }
@@ -183,8 +201,15 @@ func (p *Parser) parseReturnType() {
 
 // 以标识符开头的语句有多种形式：
 // <赋值语句> -> <左值> <赋值运算符> <表达式> ;
+// <函数调用语句> -> <函数调用> ;
 // <扩展语句> -> <标识符> : <表达式> { , <表达式> } ;
 func (p *Parser) parseIDStartStmt() {
+	if p.nextText("(") {
+		p.parseCall()
+		p.expectText(";")
+		return
+	}
+
 	p.parseDesignator()
 	if p.matchText("=") || p.matchText(":=") {
 		p.parseExpr()
@@ -207,6 +232,11 @@ func (p *Parser) parseIDStartStmt() {
 // <左值> -> <标识符> { [ <表达式> ] | . <标识符> }
 func (p *Parser) parseDesignator() {
 	p.expectKind("i", "标识符")
+	p.parseDesignatorSuffix()
+}
+
+// <左值后缀> -> [ <表达式> ] <左值后缀> | . <标识符> <左值后缀> | ε
+func (p *Parser) parseDesignatorSuffix() {
 	for {
 		if p.matchText("[") {
 			p.parseExpr()
@@ -218,6 +248,25 @@ func (p *Parser) parseDesignator() {
 			continue
 		}
 		break
+	}
+}
+
+// <函数调用> -> <标识符> ( <实参列表> )
+func (p *Parser) parseCall() {
+	p.expectKind("i", "函数名")
+	p.expectText("(")
+	p.parseArgumentList()
+	p.expectText(")")
+}
+
+// <实参列表> -> <表达式> { , <表达式> } | ε
+func (p *Parser) parseArgumentList() {
+	if p.checkText(")") {
+		return
+	}
+	p.parseExpr()
+	for p.matchText(",") {
+		p.parseExpr()
 	}
 }
 
@@ -316,10 +365,14 @@ func (p *Parser) parseUnary() {
 	p.parsePrimary()
 }
 
-// <基本表达式> -> <标识符> | <常数> | true | false | ( <表达式> )
+// <基本表达式> -> <标识符> | <函数调用> | <常数> | true | false | ( <表达式> )
 func (p *Parser) parsePrimary() {
 	if p.checkKind("i") {
-		p.parseDesignator()
+		if p.nextText("(") {
+			p.parseCall()
+		} else {
+			p.parseDesignator()
+		}
 		return
 	}
 	if p.matchKind("c") {
@@ -365,6 +418,13 @@ func (p *Parser) checkText(text string) bool {
 func (p *Parser) checkKeyword(word string) bool {
 	tok := p.current()
 	return tok.Kind == "k" && tok.Text == word
+}
+
+func (p *Parser) nextText(text string) bool {
+	if p.pos+1 >= len(p.tokens) {
+		return false
+	}
+	return p.tokens[p.pos+1].Text == text
 }
 
 func (p *Parser) isTypeKeyword() bool {

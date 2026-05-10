@@ -45,13 +45,15 @@ func Optimize(quads []semantic.Quad) Result {
 
 	folded, foldCount := foldConstants(original)
 	commonSaved, commonCount := saveCommonExpressions(folded)
-	deadRemoved, deadCount := removeDeadAssignments(commonSaved)
+	loopMoved, loopCount := optimizeLoops(commonSaved)
+	deadRemoved, deadCount := removeDeadAssignments(loopMoved)
 	optimized := reindexQuads(deadRemoved)
 
 	steps := []Step{
 		{Name: "常量表达式节省", Before: len(original), After: len(folded), Changed: foldCount},
 		{Name: "公共子表达式节省", Before: len(folded), After: len(commonSaved), Changed: commonCount},
-		{Name: "删除无用赋值", Before: len(commonSaved), After: len(deadRemoved), Changed: deadCount},
+		{Name: "循环优化", Before: len(commonSaved), After: len(loopMoved), Changed: loopCount},
+		{Name: "删除无用赋值", Before: len(loopMoved), After: len(deadRemoved), Changed: deadCount},
 	}
 
 	return Result{
@@ -60,6 +62,45 @@ func Optimize(quads []semantic.Quad) Result {
 		Optimized: optimized,
 		Steps:     steps,
 	}
+}
+
+// optimizeLoops 做基础循环优化：把循环体中的不变表达式提前到循环入口前。
+func optimizeLoops(quads []semantic.Quad) ([]semantic.Quad, int) {
+	result := copyQuads(quads)
+	count := 0
+
+	for {
+		changed := false
+		labelIndex := buildLabelIndex(result)
+		for i, q := range result {
+			if q.Op != "j" {
+				continue
+			}
+			start, ok := labelIndex[q.Result]
+			if !ok || start >= i {
+				continue
+			}
+
+			bodyStart := findLoopBodyStart(result, start, i)
+			if bodyStart < 0 {
+				continue
+			}
+			indexes := findLoopInvariants(result, bodyStart, i)
+			if len(indexes) == 0 {
+				continue
+			}
+
+			result = moveQuadsBefore(result, indexes, start)
+			count += len(indexes)
+			changed = true
+			break
+		}
+		if !changed {
+			break
+		}
+	}
+
+	return result, count
 }
 
 // BuildBasicBlocks 根据跳转和标号划分基本块。
@@ -155,12 +196,12 @@ func saveCommonExpressions(quads []semantic.Quad) ([]semantic.Quad, int) {
 // removeDeadAssignments 删除同一基本块中被覆盖且没有被使用的赋值。
 func removeDeadAssignments(quads []semantic.Quad) ([]semantic.Quad, int) {
 	blocks := BuildBasicBlocks(quads)
-	allUserNames := collectUserNames(quads)
+	initialLive := collectInitialLiveNames(quads)
 	result := []semantic.Quad{}
 	count := 0
 
 	for _, block := range blocks {
-		live := copyNameSet(allUserNames)
+		live := copyNameSet(initialLive)
 		keep := make([]bool, len(block.Quads))
 
 		for i := len(block.Quads) - 1; i >= 0; i-- {
@@ -189,6 +230,116 @@ func removeDeadAssignments(quads []semantic.Quad) ([]semantic.Quad, int) {
 	}
 
 	return result, count
+}
+
+// buildLabelIndex 建立标签名到四元式下标的映射。
+func buildLabelIndex(quads []semantic.Quad) map[string]int {
+	labelIndex := map[string]int{}
+	for i, q := range quads {
+		if q.Op == "label" {
+			labelIndex[q.Result] = i
+		}
+	}
+	return labelIndex
+}
+
+// findLoopBodyStart 找到 jfalse 后面的第一条循环体四元式。
+func findLoopBodyStart(quads []semantic.Quad, start int, end int) int {
+	for i := start + 1; i < end; i++ {
+		if quads[i].Op == "jfalse" {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+// findLoopInvariants 找出循环体中可以外提的循环不变表达式。
+func findLoopInvariants(quads []semantic.Quad, bodyStart int, bodyEnd int) []int {
+	assigned := collectAssignedNames(quads[bodyStart:bodyEnd])
+	invariantTemps := map[string]bool{}
+	indexes := []int{}
+
+	for i := bodyStart; i < bodyEnd; i++ {
+		q := quads[i]
+		if !canHoist(q) {
+			continue
+		}
+		if !isLoopInvariantValue(q.Arg1, assigned, invariantTemps) {
+			continue
+		}
+		if !isLoopInvariantValue(q.Arg2, assigned, invariantTemps) {
+			continue
+		}
+		indexes = append(indexes, i)
+		invariantTemps[baseName(q.Result)] = true
+	}
+
+	return indexes
+}
+
+// canHoist 判断一条四元式是否具备外提的基本条件。
+func canHoist(q semantic.Quad) bool {
+	if !isExpressionOp(q.Op) {
+		return false
+	}
+	if !isTempName(baseName(q.Result)) {
+		return false
+	}
+	if q.Op == "/" || q.Op == "%" {
+		return false
+	}
+	return !hasComplexName(q.Arg1) && !hasComplexName(q.Arg2) && !hasComplexName(q.Result)
+}
+
+// isLoopInvariantValue 判断一个操作数在当前循环中是否保持不变。
+func isLoopInvariantValue(text string, assigned map[string]bool, invariantTemps map[string]bool) bool {
+	name := baseName(text)
+	if name == "" || isLiteral(text) {
+		return true
+	}
+	if isLabelName(name) || hasComplexName(text) {
+		return false
+	}
+	if isTempName(name) {
+		return invariantTemps[name] || !assigned[name]
+	}
+	return !assigned[name]
+}
+
+// collectAssignedNames 收集一段四元式中被赋值的名字。
+func collectAssignedNames(quads []semantic.Quad) map[string]bool {
+	names := map[string]bool{}
+	for _, q := range quads {
+		if hasAssignedResult(q) {
+			name := baseName(q.Result)
+			if name != "" {
+				names[name] = true
+			}
+		}
+	}
+	return names
+}
+
+// moveQuadsBefore 把若干条四元式按原顺序移动到指定位置前面。
+func moveQuadsBefore(quads []semantic.Quad, indexes []int, before int) []semantic.Quad {
+	moved := map[int]bool{}
+	for _, index := range indexes {
+		moved[index] = true
+	}
+
+	result := []semantic.Quad{}
+	for i := 0; i < before; i++ {
+		result = append(result, quads[i])
+	}
+	for _, index := range indexes {
+		result = append(result, quads[index])
+	}
+	for i := before; i < len(quads); i++ {
+		if !moved[i] {
+			result = append(result, quads[i])
+		}
+	}
+	return result
 }
 
 func copyQuads(quads []semantic.Quad) []semantic.Quad {
@@ -469,6 +620,15 @@ func collectUserNames(quads []semantic.Quad) map[string]bool {
 	return names
 }
 
+func collectInitialLiveNames(quads []semantic.Quad) map[string]bool {
+	names := collectUserNames(quads)
+	for _, q := range quads {
+		addLiveName(names, q.Arg1)
+		addLiveName(names, q.Arg2)
+	}
+	return names
+}
+
 func copyNameSet(names map[string]bool) map[string]bool {
 	result := map[string]bool{}
 	for name := range names {
@@ -513,6 +673,10 @@ func baseName(text string) string {
 		name = name[:index]
 	}
 	return name
+}
+
+func hasComplexName(text string) bool {
+	return strings.Contains(text, "[") || strings.Contains(text, ".")
 }
 
 func isLiteral(text string) bool {
