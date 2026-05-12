@@ -54,7 +54,6 @@ func (p *Parser) parseProgram() {
 
 // <函数定义> -> func <标识符> ( <参数列表> ) <返回类型> <复合语句>
 func (p *Parser) parseFuncDecl() {
-	// 这里按照 Go 风格函数头进行匹配，例如 func add(x int) int
 	p.expectKeyword("func")
 	p.expectKind("i", "函数名")
 	p.expectText("(")
@@ -157,7 +156,6 @@ func (p *Parser) parseVarDecl() {
 
 // <类型声明语句> -> type <标识符> struct { <字段声明表> }
 func (p *Parser) parseTypeDecl() {
-	// 当前只支持结构体类型声明，用来覆盖课程设计中的结构体要求
 	p.expectKeyword("type")
 	p.expectKind("i", "类型名")
 	p.expectKeyword("struct")
@@ -414,6 +412,9 @@ func (p *Parser) parsePrimary() {
 	p.advance()
 }
 
+// current 表示当前递归下降子程序正在看的 Token
+// 只负责读取当前位置，不会修改 p.pos
+// 例如 parseStmt 要先看当前 Token 是 var、if 还是标识符
 func (p *Parser) current() lexer.Token {
 	// 越界时返回 eof，避免错误恢复时数组越界
 	if p.pos >= len(p.tokens) {
@@ -422,6 +423,9 @@ func (p *Parser) current() lexer.Token {
 	return p.tokens[p.pos]
 }
 
+// advance 表示消费当前 Token
+// 调用后 p.pos 指向下一个 Token
+// 所有成功匹配的地方最终都会通过它向前推进
 func (p *Parser) advance() {
 	// 向前移动一个 Token
 	if p.pos < len(p.tokens) {
@@ -429,26 +433,41 @@ func (p *Parser) advance() {
 	}
 }
 
+// isEOF 判断语法分析是否已经到达文件结尾
+// 递归下降主循环用它决定什么时候停止
 func (p *Parser) isEOF() bool {
+
 	// eof 是词法分析主动补上的结束标记
 	return p.current().Kind == "eof"
 }
 
+// checkKind 只判断当前 Token 的类别
+// kind 可以是 k、p、i、c、eof
+// 这个函数只看不吃，适合分支判断
 func (p *Parser) checkKind(kind string) bool {
 	// 只检查类别，不移动当前位置
 	return p.current().Kind == kind
 }
 
+// checkText 只判断当前 Token 的原文
+// text 可以是 func、if、+、{、} 这类具体文本
+// 这个函数只看不吃，适合判断当前语法形式
 func (p *Parser) checkText(text string) bool {
 	// 只检查原文，不移动当前位置
 	return p.current().Text == text
 }
 
+// checkKeyword 专门判断当前 Token 是否为某个关键字
+// 需要同时满足类别是 k，原文也是指定关键字
+// 这样可以避免普通标识符和关键字混淆
 func (p *Parser) checkKeyword(word string) bool {
 	tok := p.current()
 	return tok.Kind == "k" && tok.Text == word
 }
 
+// nextText 查看下一个 Token 的原文
+// 它不会移动 p.pos，只用于向前预看一个 Token
+// 典型用途是看到标识符后判断下一项是不是左括号
 func (p *Parser) nextText(text string) bool {
 	// 查看下一个 Token，用于区分函数调用和普通标识符
 	if p.pos+1 >= len(p.tokens) {
@@ -457,12 +476,20 @@ func (p *Parser) nextText(text string) bool {
 	return p.tokens[p.pos+1].Text == text
 }
 
+// isTypeKeyword 判断当前位置能不能作为类型开头
+// 基本类型用关键字表示，例如 int、bool、float、char、string
+// 数组类型以左中括号开头，例如 [10]int
+// 结构体类型或自定义类型以标识符开头
 func (p *Parser) isTypeKeyword() bool {
 	return p.checkKeyword("int") || p.checkKeyword("bool") || p.checkKeyword("float") ||
 		p.checkKeyword("char") || p.checkKeyword("string") || p.checkText("[") || p.checkKind("i")
 }
 
+// matchKind 尝试匹配某一类 Token
+// 匹配成功时会自动 advance，表示这个 Token 已被当前语法成分接受
+// 匹配失败时返回 false，不记录错误，适合可选语法或循环语法
 func (p *Parser) matchKind(kind string) bool {
+
 	// 匹配成功就消费 Token，匹配失败不报错
 	if p.checkKind(kind) {
 		p.advance()
@@ -471,6 +498,9 @@ func (p *Parser) matchKind(kind string) bool {
 	return false
 }
 
+// matchText 尝试匹配某个具体文本
+// 例如 matchText(";") 用来尝试读取语句结尾分号
+// 匹配成功会消费 Token，失败时当前位置保持不变
 func (p *Parser) matchText(text string) bool {
 	if p.checkText(text) {
 		p.advance()
@@ -479,6 +509,9 @@ func (p *Parser) matchText(text string) bool {
 	return false
 }
 
+// matchKeyword 尝试匹配某个关键字
+// 例如 matchKeyword("else") 用来处理可选 else 分支
+// 匹配失败不会报错，因为很多关键字在文法里是可选的
 func (p *Parser) matchKeyword(word string) bool {
 	if p.checkKeyword(word) {
 		p.advance()
@@ -487,6 +520,10 @@ func (p *Parser) matchKeyword(word string) bool {
 	return false
 }
 
+// expectKind 要求当前 Token 必须是指定类别
+// name 是给用户看的中文名称，例如 函数名、变量名、数组长度
+// 匹配成功就消费 Token
+// 匹配失败会记录语法错误，但不会强行消费当前 Token
 func (p *Parser) expectKind(kind string, name string) {
 	// expect 表示当前位置必须满足要求，不满足就记录错误
 	if p.checkKind(kind) {
@@ -496,6 +533,10 @@ func (p *Parser) expectKind(kind string, name string) {
 	p.addError("缺少" + name)
 }
 
+// expectText 要求当前 Token 必须是指定文本
+// 常用于必须出现的符号，例如左括号、右括号、分号、大括号
+// 匹配成功就消费 Token
+// 匹配失败会报缺少对应符号
 func (p *Parser) expectText(text string) {
 	if p.checkText(text) {
 		p.advance()
@@ -504,6 +545,10 @@ func (p *Parser) expectText(text string) {
 	p.addError("缺少 " + text)
 }
 
+// expectKeyword 要求当前 Token 必须是指定关键字
+// 常用于函数定义、变量声明、条件语句等固定开头
+// 匹配成功就消费 Token
+// 匹配失败会报缺少对应关键字
 func (p *Parser) expectKeyword(word string) {
 	if p.checkKeyword(word) {
 		p.advance()
