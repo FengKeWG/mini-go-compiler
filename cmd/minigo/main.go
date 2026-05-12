@@ -12,7 +12,6 @@ import (
 )
 
 func main() {
-	// 默认读取示例程序，也可以从命令行传入源程序路径
 	filename := "examples/basic.mg"
 	if len(os.Args) >= 2 {
 		filename = os.Args[1]

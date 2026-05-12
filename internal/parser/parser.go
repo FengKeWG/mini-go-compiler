@@ -14,9 +14,9 @@ type Result struct {
 // Parser 递归下降语法分析器
 // 保存 Token 序列和当前位置
 type Parser struct {
-	tokens []lexer.Token
-	pos    int
-	errors []string
+	tokens []lexer.Token // 词法分析传来的 Token 序列
+	pos    int           // 当前正在分析的 Token 下标
+	errors []string      // 递归下降过程中发现的语法错误
 }
 
 // Parse 对词法分析生成的 Token 序列做递归下降
@@ -42,6 +42,7 @@ func PrintResult(result Result) {
 
 // <程序> -> { <类型声明语句> | <函数定义> }
 func (p *Parser) parseProgram() {
+	// 顶层只允许出现结构体类型声明和函数定义
 	for !p.isEOF() {
 		if p.checkKeyword("type") {
 			p.parseTypeDecl()
@@ -53,6 +54,7 @@ func (p *Parser) parseProgram() {
 
 // <函数定义> -> func <标识符> ( <参数列表> ) <返回类型> <复合语句>
 func (p *Parser) parseFuncDecl() {
+	// 这里按照 Go 风格函数头进行匹配，例如 func add(x int) int
 	p.expectKeyword("func")
 	p.expectKind("i", "函数名")
 	p.expectText("(")
@@ -64,6 +66,7 @@ func (p *Parser) parseFuncDecl() {
 
 // <参数列表> -> <参数> { , <参数> } | ε
 func (p *Parser) parseParamList() {
+	// 右括号说明参数列表为空
 	if p.checkText(")") {
 		return
 	}
@@ -75,6 +78,7 @@ func (p *Parser) parseParamList() {
 
 // <参数> -> <标识符> <类型>
 func (p *Parser) parseParam() {
+	// 参数形式采用 name type，和 Go 的写法一致
 	p.expectKind("i", "参数名")
 	p.parseType()
 }
@@ -82,6 +86,7 @@ func (p *Parser) parseParam() {
 // <复合语句> -> { <语句表> }
 func (p *Parser) parseBlock() {
 	p.expectText("{")
+	// 遇到右大括号之前不断识别语句
 	for !p.checkText("}") && !p.isEOF() {
 		p.parseStmt()
 	}
@@ -92,6 +97,7 @@ func (p *Parser) parseBlock() {
 //
 //	| <for循环语句> | <break语句> | <continue语句> | <return语句> | <复合语句> | ;
 func (p *Parser) parseStmt() {
+	// 通过当前 Token 判断这一句属于哪一种语句
 	if p.checkKeyword("var") {
 		p.parseVarDecl()
 		return
@@ -129,6 +135,7 @@ func (p *Parser) parseStmt() {
 		return
 	}
 	if p.checkText(";") {
+		// 空语句直接跳过分号
 		p.advance()
 		return
 	}
@@ -150,10 +157,12 @@ func (p *Parser) parseVarDecl() {
 
 // <类型声明语句> -> type <标识符> struct { <字段声明表> }
 func (p *Parser) parseTypeDecl() {
+	// 当前只支持结构体类型声明，用来覆盖课程设计中的结构体要求
 	p.expectKeyword("type")
 	p.expectKind("i", "类型名")
 	p.expectKeyword("struct")
 	p.expectText("{")
+	// 字段形式为 字段名 类型 ;
 	for !p.checkText("}") && !p.isEOF() {
 		p.expectKind("i", "字段名")
 		p.parseType()
@@ -176,16 +185,19 @@ func (p *Parser) parseConstDecl() {
 
 // <类型> -> <基本类型> | <数组类型> | <标识符>
 func (p *Parser) parseType() {
+	// 基本类型直接消费关键字
 	if p.matchKeyword("int") || p.matchKeyword("bool") || p.matchKeyword("float") ||
 		p.matchKeyword("char") || p.matchKeyword("string") {
 		return
 	}
+	// 数组类型形如 [10]int，可以递归支持多维数组
 	if p.matchText("[") {
 		p.expectKind("c", "数组长度")
 		p.expectText("]")
 		p.parseType()
 		return
 	}
+	// 标识符类型一般是结构体类型名
 	if p.matchKind("i") {
 		return
 	}
@@ -194,6 +206,7 @@ func (p *Parser) parseType() {
 
 // <返回类型> -> <类型> | ε
 func (p *Parser) parseReturnType() {
+	// 没有返回类型时表示 void 风格函数
 	if p.isTypeKeyword() {
 		p.parseType()
 	}
@@ -204,19 +217,21 @@ func (p *Parser) parseReturnType() {
 // <函数调用语句> -> <函数调用> ;
 // <扩展语句> -> <标识符> : <表达式> { , <表达式> } ;
 func (p *Parser) parseIDStartStmt() {
+	// 标识符后面紧跟左括号，说明这是函数调用语句
 	if p.nextText("(") {
 		p.parseCall()
 		p.expectText(";")
 		return
 	}
 
+	// 否则先按左值读取，左值可能是变量、数组元素或结构体字段
 	p.parseDesignator()
 	if p.matchText("=") || p.matchText(":=") {
 		p.parseExpr()
 		p.expectText(";")
 		return
 	}
-	// 这个分支主要用于当前示例中的 pair: a, b;，同时覆盖冒号和逗号的词法测试。
+	// 这个分支主要用于当前示例中的 pair: a, b;，同时覆盖冒号和逗号的词法测试
 	if p.matchText(":") {
 		p.parseExpr()
 		for p.matchText(",") {
@@ -229,21 +244,24 @@ func (p *Parser) parseIDStartStmt() {
 	p.skipToStmtEnd()
 }
 
-// <左值> -> <标识符> { [ <表达式> ] | . <标识符> }
+// <左值> -> <标识符> { [ <表达式> ] | 点 <标识符> }
 func (p *Parser) parseDesignator() {
+	// Designator 表示可以被赋值或被读取的位置
 	p.expectKind("i", "标识符")
 	p.parseDesignatorSuffix()
 }
 
-// <左值后缀> -> [ <表达式> ] <左值后缀> | . <标识符> <左值后缀> | ε
+// <左值后缀> -> [ <表达式> ] <左值后缀> | 点 <标识符> <左值后缀> | ε
 func (p *Parser) parseDesignatorSuffix() {
 	for {
 		if p.matchText("[") {
+			// 数组下标访问，例如 scores[i]
 			p.parseExpr()
 			p.expectText("]")
 			continue
 		}
 		if p.matchText(".") {
+			// 结构体字段访问，例如 stu 的 age 字段
 			p.expectKind("i", "字段名")
 			continue
 		}
@@ -272,6 +290,7 @@ func (p *Parser) parseArgumentList() {
 
 // <条件语句> -> if <表达式> <复合语句> [ else <复合语句> ]
 func (p *Parser) parseIfStmt() {
+	// if 后面直接跟表达式和代码块，不使用括号
 	p.expectKeyword("if")
 	p.parseExpr()
 	p.parseBlock()
@@ -282,6 +301,7 @@ func (p *Parser) parseIfStmt() {
 
 // <for循环语句> -> for <表达式> <复合语句>
 func (p *Parser) parseForStmt() {
+	// 当前 for 只支持条件循环，形式接近 Go 的 for condition { }
 	p.expectKeyword("for")
 	p.parseExpr()
 	p.parseBlock()
@@ -302,6 +322,7 @@ func (p *Parser) parseContinueStmt() {
 // <return语句> -> return [ <表达式> ] ;
 func (p *Parser) parseReturnStmt() {
 	p.expectKeyword("return")
+	// return 后面可以没有表达式，用于无返回值函数
 	if !p.checkText(";") {
 		p.parseExpr()
 	}
@@ -310,6 +331,7 @@ func (p *Parser) parseReturnStmt() {
 
 // <表达式> -> <逻辑或表达式>
 func (p *Parser) parseExpr() {
+	// 表达式从最低优先级的逻辑或开始向下递归
 	p.parseOr()
 }
 
@@ -368,6 +390,7 @@ func (p *Parser) parseUnary() {
 // <基本表达式> -> <标识符> | <函数调用> | <常数> | true | false | ( <表达式> )
 func (p *Parser) parsePrimary() {
 	if p.checkKind("i") {
+		// 标识符后面是左括号时作为函数调用，否则作为普通左值
 		if p.nextText("(") {
 			p.parseCall()
 		} else {
@@ -382,6 +405,7 @@ func (p *Parser) parsePrimary() {
 		return
 	}
 	if p.matchText("(") {
+		// 括号表达式会重新进入完整表达式分析
 		p.parseExpr()
 		p.expectText(")")
 		return
@@ -391,6 +415,7 @@ func (p *Parser) parsePrimary() {
 }
 
 func (p *Parser) current() lexer.Token {
+	// 越界时返回 eof，避免错误恢复时数组越界
 	if p.pos >= len(p.tokens) {
 		return lexer.Token{Kind: "eof", Text: "#"}
 	}
@@ -398,20 +423,24 @@ func (p *Parser) current() lexer.Token {
 }
 
 func (p *Parser) advance() {
+	// 向前移动一个 Token
 	if p.pos < len(p.tokens) {
 		p.pos++
 	}
 }
 
 func (p *Parser) isEOF() bool {
+	// eof 是词法分析主动补上的结束标记
 	return p.current().Kind == "eof"
 }
 
 func (p *Parser) checkKind(kind string) bool {
+	// 只检查类别，不移动当前位置
 	return p.current().Kind == kind
 }
 
 func (p *Parser) checkText(text string) bool {
+	// 只检查原文，不移动当前位置
 	return p.current().Text == text
 }
 
@@ -421,6 +450,7 @@ func (p *Parser) checkKeyword(word string) bool {
 }
 
 func (p *Parser) nextText(text string) bool {
+	// 查看下一个 Token，用于区分函数调用和普通标识符
 	if p.pos+1 >= len(p.tokens) {
 		return false
 	}
@@ -433,6 +463,7 @@ func (p *Parser) isTypeKeyword() bool {
 }
 
 func (p *Parser) matchKind(kind string) bool {
+	// 匹配成功就消费 Token，匹配失败不报错
 	if p.checkKind(kind) {
 		p.advance()
 		return true
@@ -457,6 +488,7 @@ func (p *Parser) matchKeyword(word string) bool {
 }
 
 func (p *Parser) expectKind(kind string, name string) {
+	// expect 表示当前位置必须满足要求，不满足就记录错误
 	if p.checkKind(kind) {
 		p.advance()
 		return
@@ -481,11 +513,13 @@ func (p *Parser) expectKeyword(word string) {
 }
 
 func (p *Parser) addError(message string) {
+	// 错误信息带上当前 Token 的行列，方便在源程序中定位
 	tok := p.current()
 	p.errors = append(p.errors, fmt.Sprintf("第%d行第%d列: %s，当前单词为 %q", tok.Line, tok.Column, message, tok.Text))
 }
 
 func (p *Parser) skipToStmtEnd() {
+	// 出错后跳到分号或右大括号，避免一个错误引发大量连锁错误
 	for !p.isEOF() && !p.checkText(";") && !p.checkText("}") {
 		p.advance()
 	}

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// PrintResult 输出语义分析阶段的符号表、辅助表、活动记录和四元式。
+// PrintResult 输出语义分析阶段的符号表、辅助表、活动记录和四元式
 func PrintResult(result Result) {
 	fmt.Println("语义分析结果:")
 	if len(result.Errors) == 0 {
@@ -25,13 +25,14 @@ func PrintResult(result Result) {
 	printAinfl(result.Symbols)
 	printRinfl(result.Symbols)
 	printPfinfl(result.Symbols)
+	printParamTable(result.Symbols)
 	printConsl(result.Symbols)
 	printLenl(result.Symbols)
 	printActivityRecord(result.Symbols)
 	printQuads(result.Quads)
 }
 
-// printSynbl 输出符号表总表，对应 PPT 中的 SYNBL。
+// printSynbl 输出符号表总表，对应 PPT 中的 SYNBL
 func printSynbl(symbols []Symbol) {
 	fmt.Println("符号表总表 SYNBL:")
 	fmt.Printf("  %-4s %-12s %-12s %-8s %-6s\n", "序号", "NAME", "TYPE", "CAT", "ADDR")
@@ -46,7 +47,7 @@ func printSynbl(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printTypel 输出类型表，对应 PPT 中的 TYPEL。
+// printTypel 输出类型表，对应 PPT 中的 TYPEL
 func printTypel(symbols []Symbol) {
 	fmt.Println("类型表 TYPEL:")
 	fmt.Printf("  %-4s %-12s %-8s %-18s\n", "序号", "TVAL", "LEN", "TPOINT")
@@ -69,7 +70,7 @@ func printTypel(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printAinfl 输出数组表，对应 PPT 中的 AINFL。
+// printAinfl 输出数组表，对应 PPT 中的 AINFL
 func printAinfl(symbols []Symbol) {
 	arrays := collectArrayTypes(symbols)
 	if len(arrays) == 0 {
@@ -90,7 +91,7 @@ func printAinfl(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printRinfl 输出结构表，对应 PPT 中的 RINFL。
+// printRinfl 输出结构表，对应 PPT 中的 RINFL
 func printRinfl(symbols []Symbol) {
 	structs := collectStructs(symbols)
 	if len(structs) == 0 {
@@ -116,7 +117,7 @@ func printRinfl(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printPfinfl 输出函数表，对应 PPT 中的 PFINFL。
+// printPfinfl 输出函数表，对应 PPT 中的 PFINFL
 func printPfinfl(symbols []Symbol) {
 	fmt.Println("函数表 PFINFL:")
 	fmt.Printf("  %-12s %-8s %-8s %-8s %-12s %-8s %-18s\n", "函数名", "LEVEL", "OFF", "FN", "ENTRY", "RETURN", "PARAM")
@@ -134,7 +135,39 @@ func printPfinfl(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printConsl 输出常量表，对应 PPT 中的 CONSL。
+// printParamTable 输出函数形参表，对应 PFINFL 中 PARAM 指向的参数信息
+func printParamTable(symbols []Symbol) {
+	hasParam := false
+	for _, sym := range symbols {
+		if sym.Category == "p" {
+			hasParam = true
+			break
+		}
+	}
+	if !hasParam {
+		return
+	}
+
+	fmt.Println("参数表 PARAM:")
+	fmt.Printf("  %-12s %-8s %-12s %-12s %-8s %-8s\n", "函数名", "序号", "参数名", "TYPE", "CAT", "ADDR")
+	index := 1
+	for _, sym := range symbols {
+		if sym.Category != "p" {
+			continue
+		}
+		funcName, paramName := splitScopedName(sym.Name)
+		addr := fmt.Sprintf("%d", sym.Addr)
+		if sym.Addr < 0 {
+			addr = "-"
+		}
+		fmt.Printf("  %-12s %-8d %-12s %-12s %-8s %-8s\n",
+			funcName, index, paramName, sym.Type, sym.Category, addr)
+		index++
+	}
+	fmt.Println()
+}
+
+// printConsl 输出常量表，对应 PPT 中的 CONSL
 func printConsl(symbols []Symbol) {
 	hasConst := false
 	for _, sym := range symbols {
@@ -157,7 +190,7 @@ func printConsl(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printLenl 输出长度表，对应 PPT 中的 LENL。
+// printLenl 输出长度表，对应 PPT 中的 LENL
 func printLenl(symbols []Symbol) {
 	fmt.Println("长度表 LENL:")
 	fmt.Printf("  %-12s %-8s\n", "TYPE", "LEN")
@@ -181,7 +214,7 @@ func printLenl(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printActivityRecord 输出活动记录表，对应 PPT 中的 VALL。
+// printActivityRecord 输出活动记录表，对应 PPT 中的 VALL
 func printActivityRecord(symbols []Symbol) {
 	fmt.Println("活动记录表 VALL:")
 	printVallRow("地址", "内容", "类型", "种类")
@@ -204,7 +237,7 @@ func printActivityRecord(symbols []Symbol) {
 	fmt.Println()
 }
 
-// printQuads 输出语义动作生成的四元式序列。
+// printQuads 输出语义动作生成的四元式序列
 func printQuads(quads []Quad) {
 	fmt.Println("四元式序列:")
 	for _, q := range quads {
@@ -213,7 +246,7 @@ func printQuads(quads []Quad) {
 	fmt.Println()
 }
 
-// collectStructs 收集所有结构体类型，方便后面计算字段长度。
+// collectStructs 收集所有结构体类型，方便后面计算字段长度
 func collectStructs(symbols []Symbol) map[string]Symbol {
 	structs := map[string]Symbol{}
 	for _, sym := range symbols {
@@ -224,7 +257,7 @@ func collectStructs(symbols []Symbol) map[string]Symbol {
 	return structs
 }
 
-// collectArrayTypes 收集程序中出现过的数组类型。
+// collectArrayTypes 收集程序中出现过的数组类型
 func collectArrayTypes(symbols []Symbol) []string {
 	arrays := []string{}
 	for _, sym := range symbols {
@@ -235,7 +268,7 @@ func collectArrayTypes(symbols []Symbol) []string {
 	return arrays
 }
 
-// addUnique 向字符串切片中加入一个不重复的元素。
+// addUnique 向字符串切片中加入一个不重复的元素
 func addUnique(items []string, item string) []string {
 	for _, old := range items {
 		if old == item {
@@ -245,7 +278,7 @@ func addUnique(items []string, item string) []string {
 	return append(items, item)
 }
 
-// typeCode 把 MiniGo 类型转换成 PPT 中常见的类型码。
+// typeCode 把 MiniGo 类型转换成 PPT 中常见的类型码
 func typeCode(typ string, structs map[string]Symbol) string {
 	switch typ {
 	case "int":
@@ -269,7 +302,7 @@ func typeCode(typ string, structs map[string]Symbol) string {
 	}
 }
 
-// typePointer 给数组和结构体类型生成对应辅助表位置说明。
+// typePointer 给数组和结构体类型生成对应辅助表位置说明
 func typePointer(typ string, structs map[string]Symbol) string {
 	if strings.HasPrefix(typ, "[") {
 		return "AINFL(" + typ + ")"
@@ -280,7 +313,7 @@ func typePointer(typ string, structs map[string]Symbol) string {
 	return "null"
 }
 
-// typeLengthForPrint 计算打印辅助表时需要展示的类型长度。
+// typeLengthForPrint 计算打印辅助表时需要展示的类型长度
 func typeLengthForPrint(typ string, structs map[string]Symbol) int {
 	switch typ {
 	case "int":
@@ -303,7 +336,7 @@ func typeLengthForPrint(typ string, structs map[string]Symbol) int {
 	}
 }
 
-// parseArrayType 解析形如 [10]int 的数组类型。
+// parseArrayType 解析形如 [10]int 的数组类型
 func parseArrayType(typ string) (int, string, bool) {
 	if !strings.HasPrefix(typ, "[") {
 		return 0, "", false
@@ -319,7 +352,7 @@ func parseArrayType(typ string) (int, string, bool) {
 	return size, typ[right+1:], true
 }
 
-// parseField 解析结构体字段保存形式，如 age:int。
+// parseField 解析结构体字段保存形式，如 age:int
 func parseField(field string) (string, string, bool) {
 	parts := strings.SplitN(field, ":", 2)
 	if len(parts) != 2 {
@@ -328,6 +361,16 @@ func parseField(field string) (string, string, bool) {
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
 }
 
+// splitScopedName 把带函数作用域的名字拆成函数名和局部名
+func splitScopedName(name string) (string, string) {
+	parts := strings.SplitN(name, ".", 2)
+	if len(parts) != 2 {
+		return "-", name
+	}
+	return parts[0], parts[1]
+}
+
+// countParams 统计函数参数列表中的参数个数
 func countParams(params string) int {
 	if strings.TrimSpace(params) == "" {
 		return 0
@@ -335,12 +378,12 @@ func countParams(params string) int {
 	return len(strings.Split(params, ","))
 }
 
-// printVallRow 按显示宽度输出一行，避免中文占两个字符宽度导致列歪。
+// printVallRow 按显示宽度输出一行，避免中文占两个字符宽度导致列歪
 func printVallRow(addr string, content string, typ string, category string) {
 	fmt.Println("  " + padDisplay(addr, 8) + padDisplay(content, 24) + padDisplay(typ, 14) + category)
 }
 
-// padDisplay 按终端显示宽度补空格；中文通常占两个英文宽度。
+// padDisplay 按终端显示宽度补空格，中文通常占两个英文宽度
 func padDisplay(text string, width int) string {
 	spaceCount := width - displayWidth(text)
 	if spaceCount < 1 {
@@ -349,7 +392,7 @@ func padDisplay(text string, width int) string {
 	return text + strings.Repeat(" ", spaceCount)
 }
 
-// displayWidth 简单估算字符串在终端中的显示宽度。
+// displayWidth 简单估算字符串在终端中的显示宽度
 func displayWidth(text string) int {
 	width := 0
 	for _, ch := range text {
