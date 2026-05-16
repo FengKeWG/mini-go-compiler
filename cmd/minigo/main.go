@@ -9,6 +9,7 @@ import (
 	"minigo/internal/optimizer"
 	"minigo/internal/parser"
 	"minigo/internal/semantic"
+	"minigo/internal/vm"
 )
 
 func main() {
@@ -51,4 +52,8 @@ func main() {
 	// 第五阶段：目标代码生成，输出活跃信息和目标指令序列
 	codegenResult := codegen.Generate(optimizeResult.Optimized)
 	codegen.PrintResult(codegenResult)
+
+	// 第六阶段：目标指令运行平台，解释执行生成的目标代码
+	vmResult := vm.Run(codegenResult.Instructions, semanticResult.Symbols)
+	vm.PrintResult(vmResult)
 }

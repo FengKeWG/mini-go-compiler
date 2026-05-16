@@ -16,6 +16,7 @@ import (
 	"minigo/internal/optimizer"
 	"minigo/internal/parser"
 	"minigo/internal/semantic"
+	"minigo/internal/vm"
 )
 
 type tableView struct {
@@ -55,6 +56,8 @@ type pageSet struct {
 	instructionSetTable *tableView // 目标代码指令集合
 	liveTable           *tableView // 活跃信息表
 	targetTable         *tableView // 目标代码表
+	runtimeTable        *tableView // 目标指令运行后的变量表
+	traceTable          *tableView // 目标指令运行轨迹表
 
 	errorText *widget.Entry // 错误信息文本输出
 }
@@ -65,6 +68,7 @@ type analyzeView struct {
 	semanticResult semantic.Result  // 语义分析结构化结果
 	optimizeResult optimizer.Result // 优化结构化结果
 	codegenResult  codegen.Result   // 目标代码结构化结果
+	runtimeResult  vm.Result        // 目标指令运行平台结构化结果
 
 	lexerText    string // 词法分析完整文本，复制按钮使用
 	parserText   string // 语法分析完整文本，复制按钮使用
@@ -72,6 +76,7 @@ type analyzeView struct {
 	quadText     string // 四元式完整文本，复制按钮使用
 	optimizeText string // 优化结果完整文本，复制按钮使用
 	codegenText  string // 目标代码完整文本，复制按钮使用
+	runtimeText  string // 目标指令运行平台完整文本，复制按钮使用
 	errorText    string // 错误信息完整文本，复制按钮使用
 	statusText   string // 底部状态栏文字
 }
@@ -189,6 +194,8 @@ func newPageSet() *pageSet {
 		instructionSetTable: newTableView([]string{"序号", "指令说明"}, []float32{70, 620}),
 		liveTable:           newTableView([]string{"基本块", "四元式范围", "位置", "变量"}, []float32{90, 120, 90, 180}),
 		targetTable:         newTableView([]string{"序号", "OP", "ARG1", "ARG2"}, []float32{70, 120, 180, 180}),
+		runtimeTable:        newTableView([]string{"名称", "值"}, []float32{180, 260}),
+		traceTable:          newTableView([]string{"步数", "PC", "指令", "R0"}, []float32{80, 80, 260, 160}),
 
 		errorText: newOutputEntry("暂无错误"),
 	}
@@ -307,6 +314,8 @@ func buildCodegenPage(w fyne.Window, status *widget.Label, pages *pageSet, curre
 		container.NewTabItem("指令集合", pages.instructionSetTable.table),
 		container.NewTabItem("活跃信息", pages.liveTable.table),
 		container.NewTabItem("目标代码", pages.targetTable.table),
+		container.NewTabItem("运行结果", pages.runtimeTable.table),
+		container.NewTabItem("运行轨迹", pages.traceTable.table),
 	)
 	tables.SetTabLocation(container.TabLocationTop)
 	return container.NewBorder(
@@ -371,6 +380,8 @@ func applyAnalyzeView(pages *pageSet, view analyzeView) {
 	pages.instructionSetTable.setRows(instructionSetRows(view.codegenResult.InstructionSet))
 	pages.liveTable.setRows(liveRows(view.codegenResult.LiveBlocks))
 	pages.targetTable.setRows(instructionRows(view.codegenResult.Instructions))
+	pages.runtimeTable.setRows(runtimeRows(view.runtimeResult))
+	pages.traceTable.setRows(traceRows(view.runtimeResult.Trace))
 
 	pages.errorText.SetText(view.errorText)
 }
@@ -394,6 +405,7 @@ func emptyAnalyzeView() analyzeView {
 		quadText:     "等待分析",
 		optimizeText: "等待分析",
 		codegenText:  "等待分析",
+		runtimeText:  "等待分析",
 		errorText:    "暂无错误",
 		statusText:   "等待分析",
 	}
@@ -412,7 +424,7 @@ func loadExample() string {
 }`
 }
 
-// analyzeSource 串起词法、语法、语义、优化、目标代码五个阶段
+// analyzeSource 串起词法、语法、语义、优化、目标代码和运行平台六个阶段
 func analyzeSource(source string) analyzeView {
 	view := emptyAnalyzeView()
 	// 默认认为后续阶段未执行，只有上一阶段成功后才覆盖
@@ -421,6 +433,7 @@ func analyzeSource(source string) analyzeView {
 	view.quadText = "未执行：上一阶段存在错误"
 	view.optimizeText = "未执行：上一阶段存在错误"
 	view.codegenText = "未执行：上一阶段存在错误"
+	view.runtimeText = "未执行：上一阶段存在错误"
 
 	lexResult := lexer.Scan(source)
 	view.lexResult = lexResult
@@ -459,10 +472,19 @@ func analyzeSource(source string) analyzeView {
 
 	codegenResult := codegen.Generate(optimizeResult.Optimized)
 	view.codegenResult = codegenResult
-	view.codegenText = formatCodegen(codegenResult)
+	runtimeResult := vm.Run(codegenResult.Instructions, semanticResult.Symbols)
+	view.runtimeResult = runtimeResult
+	view.runtimeText = formatRuntime(runtimeResult)
+	view.codegenText = formatCodegen(codegenResult) + "\n\n" + view.runtimeText
+
+	if len(runtimeResult.Errors) > 0 {
+		view.errorText = formatErrors("目标指令运行错误", runtimeResult.Errors)
+		view.statusText = fmt.Sprintf("目标指令运行发现 %d 个错误", len(runtimeResult.Errors))
+		return view
+	}
 
 	view.errorText = "暂无错误"
-	view.statusText = "分析完成：词法、语法、语义、优化、目标代码均已生成"
+	view.statusText = "分析完成：词法、语法、语义、优化、目标代码和运行结果均已生成"
 	return view
 }
 
@@ -929,6 +951,37 @@ func instructionRows(instructions []codegen.Instruction) [][]string {
 	return rows
 }
 
+// runtimeRows 把目标指令运行结果转换成 GUI 表格行
+func runtimeRows(result vm.Result) [][]string {
+	rows := [][]string{}
+	if len(result.Errors) > 0 {
+		for _, err := range result.Errors {
+			rows = append(rows, []string{"运行错误", err})
+		}
+		return rows
+	}
+
+	rows = append(rows, []string{"返回值", result.ReturnValue})
+	for _, variable := range result.Variables {
+		rows = append(rows, []string{variable.Name, variable.Value})
+	}
+	return rows
+}
+
+// traceRows 把目标指令执行轨迹转换成 GUI 表格行
+func traceRows(trace []vm.Trace) [][]string {
+	rows := make([][]string, 0, len(trace))
+	for _, item := range trace {
+		rows = append(rows, []string{
+			fmt.Sprintf("%d", item.Step),
+			fmt.Sprintf("%d", item.PC),
+			item.Instruction,
+			item.R0,
+		})
+	}
+	return rows
+}
+
 // formatLexerSummary 生成词法分析顶部摘要
 func formatLexerSummary(result lexer.Result) string {
 	return fmt.Sprintf(
@@ -1068,6 +1121,22 @@ func formatCodegen(result codegen.Result) string {
 	for _, inst := range result.Instructions {
 		fmt.Fprintf(&b, "%-5d %-8s %-8s %s\n", inst.Index, inst.Op, inst.Arg1+",", inst.Arg2)
 	}
+	return b.String()
+}
+
+// formatRuntime 生成目标指令运行平台文本
+func formatRuntime(result vm.Result) string {
+	var b strings.Builder
+	b.WriteString("目标指令运行平台:\n")
+	if len(result.Errors) > 0 {
+		b.WriteString("运行错误:\n")
+		writeErrors(&b, result.Errors)
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "返回值: %s\n\n", result.ReturnValue)
+	appendTextTable(&b, "最终变量表", []string{"变量", "值"}, runtimeRows(result)[1:])
+	appendTextTable(&b, "执行轨迹", []string{"步数", "PC", "指令", "R0"}, traceRows(result.Trace))
 	return b.String()
 }
 
