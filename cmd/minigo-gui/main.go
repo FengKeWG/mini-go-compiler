@@ -34,7 +34,11 @@ type pageSet struct {
 	identTable     *tableView    // 标识符表 I
 	constTable     *tableView    // 常数表 C
 
-	parserText *widget.Entry // 语法分析文本输出
+	parserText           *widget.Entry // 语法分析文本输出
+	productionTable      *tableView    // 表达式算符文法产生式表
+	firstLastTable       *tableView    // FIRSTVT 和 LASTVT 表
+	precedenceTable      *tableView    // 算符优先关系表
+	operatorProcessTable *tableView    // 算符优先分析过程表
 
 	symbolHint  *widget.Label // 符号种类说明
 	symbolTable *tableView    // 符号表总表 SYNBL
@@ -138,9 +142,7 @@ func main() {
 
 	tabs := container.NewAppTabs(
 		container.NewTabItem("词法分析", buildLexerPage(w, statusLabel, pages, &current)),
-		container.NewTabItem("语法分析", buildTextPage(w, statusLabel, pages.parserText, "复制语法分析", func() string {
-			return current.parserText
-		})),
+		container.NewTabItem("语法分析", buildParserPage(w, statusLabel, pages, &current)),
 		container.NewTabItem("符号表", buildSymbolPage(w, statusLabel, pages, &current)),
 		container.NewTabItem("四元式", buildTablePage(w, statusLabel, pages.quadTable, "复制四元式", func() string {
 			return current.quadText
@@ -172,7 +174,12 @@ func newPageSet() *pageSet {
 		identTable:     newTableView([]string{"编号", "标识符"}, []float32{80, 260}),
 		constTable:     newTableView([]string{"编号", "常数"}, []float32{80, 260}),
 
-		parserText: newOutputEntry("等待分析"),
+		parserText:      newOutputEntry("等待分析"),
+		productionTable: newTableView([]string{"序号", "左部", "右部"}, []float32{70, 90, 320}),
+		firstLastTable:  newTableView([]string{"非终结符", "FIRSTVT", "LASTVT"}, []float32{100, 360, 360}),
+		precedenceTable: newTableView([]string{"栈顶终结符", "当前输入", "优先关系"}, []float32{140, 140, 120}),
+		operatorProcessTable: newTableView([]string{"表达式", "步数", "符号栈", "输入串", "关系", "动作"},
+			[]float32{260, 70, 220, 220, 70, 180}),
 
 		symbolHint:  widget.NewLabel("CAT说明：f=函数，p=形式参数，v=变量，c=常量，type=类型，t=临时变量。t1/t2/t3 是四元式生成时产生的中间结果。"),
 		symbolTable: newTableView([]string{"序号", "NAME", "TYPE", "CAT", "ADDR", "LEN", "VALUE"}, []float32{64, 180, 150, 82, 82, 82, 220}),
@@ -262,6 +269,25 @@ func buildLexerPage(w fyne.Window, status *widget.Label, pages *pageSet, current
 		copyButton(w, status, "复制词法分析", func() string { return current.lexerText }),
 	)
 	return container.NewBorder(top, nil, nil, nil, tables)
+}
+
+// buildParserPage 构造语法分析页，包含递归下降和算符优先展示
+func buildParserPage(w fyne.Window, status *widget.Label, pages *pageSet, current *analyzeView) fyne.CanvasObject {
+	tables := container.NewAppTabs(
+		container.NewTabItem("递归下降", pages.parserText),
+		container.NewTabItem("算符文法", pages.productionTable.table),
+		container.NewTabItem("FIRSTVT/LASTVT", pages.firstLastTable.table),
+		container.NewTabItem("优先关系表", pages.precedenceTable.table),
+		container.NewTabItem("分析过程", pages.operatorProcessTable.table),
+	)
+	tables.SetTabLocation(container.TabLocationTop)
+	return container.NewBorder(
+		copyButton(w, status, "复制语法分析", func() string { return current.parserText }),
+		nil,
+		nil,
+		nil,
+		tables,
+	)
 }
 
 // buildSymbolPage 构造符号表页，按 PPT 中的各类表拆成多个页签
@@ -357,6 +383,10 @@ func applyAnalyzeView(pages *pageSet, view analyzeView) {
 	pages.constTable.setRows(stringRows(view.lexResult.Constants))
 
 	pages.parserText.SetText(view.parserText)
+	pages.productionTable.setRows(productionRows(view.parseResult.Productions))
+	pages.firstLastTable.setRows(firstLastRows(view.parseResult.SetRows))
+	pages.precedenceTable.setRows(relationRows(view.parseResult.Relations))
+	pages.operatorProcessTable.setRows(operatorStepRows(view.parseResult.Steps))
 
 	// 符号表页刷新
 	pages.symbolTable.setRows(symbolRows(view.semanticResult.Symbols))
@@ -509,6 +539,53 @@ func stringRows(items []string) [][]string {
 	rows := make([][]string, 0, len(items))
 	for i, item := range items {
 		rows = append(rows, []string{fmt.Sprintf("%d", i+1), item})
+	}
+	return rows
+}
+
+// productionRows 把算符文法产生式转换成 GUI 表格行
+func productionRows(productions []parser.Production) [][]string {
+	rows := make([][]string, 0, len(productions))
+	for i, production := range productions {
+		rows = append(rows, []string{
+			fmt.Sprintf("%d", i+1),
+			production.Left,
+			strings.Join(production.Right, " "),
+		})
+	}
+	return rows
+}
+
+// firstLastRows 把 FIRSTVT 和 LASTVT 集合转换成 GUI 表格行
+func firstLastRows(items []parser.FirstLastRow) [][]string {
+	rows := make([][]string, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, []string{item.NonTerminal, item.FirstVT, item.LastVT})
+	}
+	return rows
+}
+
+// relationRows 把算符优先关系转换成 GUI 表格行
+func relationRows(items []parser.RelationRow) [][]string {
+	rows := make([][]string, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, []string{item.StackTop, item.Input, item.Relation})
+	}
+	return rows
+}
+
+// operatorStepRows 把算符优先分析过程转换成 GUI 表格行
+func operatorStepRows(items []parser.OpStep) [][]string {
+	rows := make([][]string, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, []string{
+			item.Expression,
+			fmt.Sprintf("%d", item.Step),
+			item.Stack,
+			item.Input,
+			item.Relation,
+			item.Action,
+		})
 	}
 	return rows
 }
@@ -1048,9 +1125,15 @@ func formatParser(result parser.Result) string {
 	b.WriteString("递归下降语法分析结果:\n\n")
 	if len(result.Errors) == 0 {
 		b.WriteString("通过：源程序符合当前 MiniGo 文法。\n")
-		return b.String()
+	} else {
+		writeErrors(&b, result.Errors)
 	}
-	writeErrors(&b, result.Errors)
+
+	b.WriteString("\n")
+	appendTextTable(&b, "表达式算符文法", []string{"序号", "左部", "右部"}, productionRows(result.Productions))
+	appendTextTable(&b, "FIRSTVT / LASTVT", []string{"非终结符", "FIRSTVT", "LASTVT"}, firstLastRows(result.SetRows))
+	appendTextTable(&b, "算符优先关系表", []string{"栈顶终结符", "当前输入", "优先关系"}, relationRows(result.Relations))
+	appendTextTable(&b, "算符优先分析过程", []string{"表达式", "步数", "符号栈", "输入串", "关系", "动作"}, operatorStepRows(result.Steps))
 	return b.String()
 }
 

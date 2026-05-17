@@ -8,7 +8,11 @@ import (
 
 // Result 保存语法分析阶段的结果
 type Result struct {
-	Errors []string // 语法错误信息
+	Errors      []string       // 语法错误信息
+	Productions []Production   // 算符优先表达式文法
+	SetRows     []FirstLastRow // FIRSTVT 和 LASTVT 集合
+	Relations   []RelationRow  // 算符优先关系表
+	Steps       []OpStep       // 算符优先分析过程
 }
 
 // Parser 递归下降语法分析器
@@ -23,7 +27,14 @@ type Parser struct {
 func Parse(tokens []lexer.Token) Result {
 	p := Parser{tokens: tokens}
 	p.parseProgram()
-	return Result{Errors: p.errors}
+	opResult := BuildOperatorResult(tokens)
+	return Result{
+		Errors:      p.errors,
+		Productions: opResult.Productions,
+		SetRows:     opResult.SetRows,
+		Relations:   opResult.Relations,
+		Steps:       opResult.Steps,
+	}
 }
 
 // PrintResult 输出语法分析结果
@@ -32,12 +43,14 @@ func PrintResult(result Result) {
 	if len(result.Errors) == 0 {
 		fmt.Println("  递归下降语法分析成功")
 		fmt.Println()
+		printOperatorDetails(result)
 		return
 	}
 	for _, err := range result.Errors {
 		fmt.Println(" ", err)
 	}
 	fmt.Println()
+	printOperatorDetails(result)
 }
 
 // <程序> -> { <类型声明语句> | <函数定义> }
