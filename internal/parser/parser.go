@@ -92,7 +92,7 @@ func (p *Parser) parseBlock() {
 	p.expectText("}")
 }
 
-// <语句> -> <变量声明语句> | <常量声明语句> | <赋值语句> | <条件语句>
+// <语句> -> <变量声明语句> | <常量声明语句> | <类型声明语句> | <赋值语句> | <自增自减语句> | <条件语句>
 //
 //	| <for循环语句> | <break语句> | <continue语句> | <return语句> | <复合语句> | ;
 func (p *Parser) parseStmt() {
@@ -213,6 +213,7 @@ func (p *Parser) parseReturnType() {
 // 以标识符开头的语句有多种形式：
 // <赋值语句> -> <左值> <赋值运算符> <表达式> ;
 // <函数调用语句> -> <函数调用> ;
+// <自增自减语句> -> <左值> (++ | --) ;
 func (p *Parser) parseIDStartStmt() {
 	// 标识符后面紧跟左括号，说明这是函数调用语句
 	if p.nextText("(") {
@@ -228,8 +229,30 @@ func (p *Parser) parseIDStartStmt() {
 		p.expectText(";")
 		return
 	}
-	p.addError("标识符后面应为 = 或 :=")
+	if p.matchText("++") || p.matchText("--") {
+		p.expectText(";")
+		return
+	}
+	p.addError("标识符后面应为 =、:=、++ 或 --")
 	p.skipToStmtEnd()
+}
+
+// <简单语句> -> <函数调用> | <左值> <赋值运算符> <表达式> | <左值> (++ | --)
+func (p *Parser) parseSimpleStmtNoSemicolon() {
+	if p.nextText("(") {
+		p.parseCall()
+		return
+	}
+
+	p.parseDesignator()
+	if p.matchText("=") || p.matchText(":=") {
+		p.parseExpr()
+		return
+	}
+	if p.matchText("++") || p.matchText("--") {
+		return
+	}
+	p.addError("简单语句中标识符后面应为 =、:=、++ 或 --")
 }
 
 // <左值> -> <标识符> { [ <表达式> ] | 点 <标识符> }
@@ -287,10 +310,28 @@ func (p *Parser) parseIfStmt() {
 	}
 }
 
-// <for循环语句> -> for <表达式> <复合语句>
+// <for循环语句> -> for <表达式> <复合语句> | for <简单语句>? ; <表达式>? ; <简单语句>? <复合语句> | for <复合语句>
 func (p *Parser) parseForStmt() {
-	// 当前 for 只支持条件循环，形式接近 Go 的 for condition { }
 	p.expectKeyword("for")
+	if p.checkText("{") {
+		p.parseBlock()
+		return
+	}
+	if p.hasTextBeforeBlock(";") {
+		if !p.checkText(";") {
+			p.parseSimpleStmtNoSemicolon()
+		}
+		p.expectText(";")
+		if !p.checkText(";") {
+			p.parseExpr()
+		}
+		p.expectText(";")
+		if !p.checkText("{") {
+			p.parseSimpleStmtNoSemicolon()
+		}
+		p.parseBlock()
+		return
+	}
 	p.parseExpr()
 	p.parseBlock()
 }
@@ -464,6 +505,20 @@ func (p *Parser) nextText(text string) bool {
 		return false
 	}
 	return p.tokens[p.pos+1].Text == text
+}
+
+// hasTextBeforeBlock 判断当前 for 头部到代码块之前是否出现指定符号
+// 用它区分 for 条件循环 和 for init; cond; post 三段式循环
+func (p *Parser) hasTextBeforeBlock(text string) bool {
+	for i := p.pos; i < len(p.tokens); i++ {
+		if p.tokens[i].Text == "{" || p.tokens[i].Kind == "eof" {
+			return false
+		}
+		if p.tokens[i].Text == text {
+			return true
+		}
+	}
+	return false
 }
 
 // isTypeKeyword 判断当前位置能不能作为类型开头

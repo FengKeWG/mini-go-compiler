@@ -334,10 +334,17 @@ func (a *Analyzer) parseReturnType() string {
 
 // <赋值语句> -> <左值> <赋值运算符> <表达式> ;
 func (a *Analyzer) parseIDStartStmt() {
+	a.parseSimpleStmt(true)
+}
+
+// <简单语句> -> <函数调用> | <左值> <赋值运算符> <表达式> | <左值> (++ | --)
+func (a *Analyzer) parseSimpleStmt(needSemicolon bool) {
 	// 标识符后面是左括号，说明这是函数调用语句
 	if a.nextText("(") {
 		a.parseCallExpr()
-		a.expectText(";")
+		if needSemicolon {
+			a.expectText(";")
+		}
 		return
 	}
 
@@ -365,12 +372,45 @@ func (a *Analyzer) parseIDStartStmt() {
 			a.addError("赋值类型不匹配：" + left.Type + " <- " + value.Type)
 		}
 		a.emit("=", value.Name, "_", left.Name)
-		a.expectText(";")
+		if needSemicolon {
+			a.expectText(";")
+		}
 		return
 	}
 
-	a.addError("标识符后面应为 = 或 :=")
-	a.skipToStmtEnd()
+	if a.matchText("++") {
+		a.emitSelfUpdate(left, "+")
+		if needSemicolon {
+			a.expectText(";")
+		}
+		return
+	}
+	if a.matchText("--") {
+		a.emitSelfUpdate(left, "-")
+		if needSemicolon {
+			a.expectText(";")
+		}
+		return
+	}
+
+	a.addError("标识符后面应为 =、:=、++ 或 --")
+	if needSemicolon {
+		a.skipToStmtEnd()
+	}
+}
+
+// emitSelfUpdate 把 i++ 或 i-- 翻译成普通四元式
+func (a *Analyzer) emitSelfUpdate(left operand, op string) {
+	if left.Type == "unknown" {
+		a.addError("未声明的标识符 " + left.Name)
+		return
+	}
+	if left.Type != "int" && left.Type != "float" {
+		a.addError("自增自减只能用于数字类型")
+		return
+	}
+	temp := a.makeBinary(op, left, operand{Name: "1", Type: "int"})
+	a.emit("=", temp.Name, "_", left.Name)
 }
 
 // <左值> -> <标识符> { [ <表达式> ] | 点 <标识符> }
@@ -437,9 +477,22 @@ func (a *Analyzer) parseIfStmt() {
 	}
 }
 
-// <for循环语句> -> for <表达式> <复合语句>
+// <for循环语句> -> for <表达式> <复合语句> | for <简单语句>? ; <表达式>? ; <简单语句>? <复合语句> | for <复合语句>
 func (a *Analyzer) parseForStmt() {
 	a.expectKeyword("for")
+	if a.checkText("{") {
+		a.parseInfiniteForStmt()
+		return
+	}
+	if a.hasTextBeforeBlock(";") {
+		a.parseThreePartForStmt()
+		return
+	}
+	a.parseConditionForStmt()
+}
+
+// parseConditionForStmt 处理 for 条件 { } 这种类似 while 的循环
+func (a *Analyzer) parseConditionForStmt() {
 	begin := a.newLabel()
 	end := a.newLabel()
 	// begin 标号放在条件判断之前，循环体结束后跳回 begin
@@ -450,6 +503,57 @@ func (a *Analyzer) parseForStmt() {
 	a.loopStack = append(a.loopStack, loopLabel{Begin: begin, End: end})
 	a.parseBlock()
 	a.loopStack = a.loopStack[:len(a.loopStack)-1]
+	a.emit("j", "_", "_", begin)
+	a.emit("label", "_", "_", end)
+}
+
+// parseInfiniteForStmt 处理 for { } 这种无限循环
+func (a *Analyzer) parseInfiniteForStmt() {
+	begin := a.newLabel()
+	end := a.newLabel()
+	a.emit("label", "_", "_", begin)
+	a.loopStack = append(a.loopStack, loopLabel{Begin: begin, End: end})
+	a.parseBlock()
+	a.loopStack = a.loopStack[:len(a.loopStack)-1]
+	a.emit("j", "_", "_", begin)
+	a.emit("label", "_", "_", end)
+}
+
+// parseThreePartForStmt 处理 for 初始化 ; 条件 ; 更新 { } 这种三段式循环
+func (a *Analyzer) parseThreePartForStmt() {
+	if !a.checkText(";") {
+		// 初始化语句先执行一次，所以直接生成在循环开始之前
+		a.parseSimpleStmt(false)
+	}
+	a.expectText(";")
+
+	begin := a.newLabel()
+	post := a.newLabel()
+	end := a.newLabel()
+	a.emit("label", "_", "_", begin)
+
+	if !a.checkText(";") {
+		// 条件为空时表示永真循环
+		cond := a.parseExpr()
+		a.emit("jfalse", cond.Name, "_", end)
+	}
+	a.expectText(";")
+
+	postStart := len(a.quads)
+	if !a.checkText("{") {
+		// 更新语句源码上在循环体前面，但运行时要放到循环体后面
+		a.parseSimpleStmt(false)
+	}
+	postQuads := a.takeQuads(postStart)
+
+	// 三段式 for 的 continue 应该跳到更新语句，而不是直接跳到条件判断
+	a.loopStack = append(a.loopStack, loopLabel{Begin: post, End: end})
+	a.parseBlock()
+	a.loopStack = a.loopStack[:len(a.loopStack)-1]
+
+	// 循环体结束后执行更新语句，再回到条件判断
+	a.emit("label", "_", "_", post)
+	a.appendQuads(postQuads)
 	a.emit("j", "_", "_", begin)
 	a.emit("label", "_", "_", end)
 }
@@ -784,6 +888,24 @@ func (a *Analyzer) emit(op string, arg1 string, arg2 string, result string) {
 	})
 }
 
+// takeQuads 取出从 start 开始新生成的四元式，并从原列表里临时删除
+func (a *Analyzer) takeQuads(start int) []Quad {
+	if start >= len(a.quads) {
+		return nil
+	}
+	result := make([]Quad, len(a.quads[start:]))
+	copy(result, a.quads[start:])
+	a.quads = a.quads[:start]
+	return result
+}
+
+// appendQuads 把暂存的四元式重新追加到当前位置，并重新分配编号
+func (a *Analyzer) appendQuads(quads []Quad) {
+	for _, q := range quads {
+		a.emit(q.Op, q.Arg1, q.Arg2, q.Result)
+	}
+}
+
 func (a *Analyzer) current() lexer.Token {
 	// 越界时返回 eof，避免错误恢复时数组越界
 	if a.pos >= len(a.tokens) {
@@ -821,6 +943,20 @@ func (a *Analyzer) nextText(text string) bool {
 		return false
 	}
 	return a.tokens[a.pos+1].Text == text
+}
+
+// hasTextBeforeBlock 判断当前 for 头部到代码块之前是否出现指定符号
+// 用它区分 for 条件循环 和 for init; cond; post 三段式循环
+func (a *Analyzer) hasTextBeforeBlock(text string) bool {
+	for i := a.pos; i < len(a.tokens); i++ {
+		if a.tokens[i].Text == "{" || a.tokens[i].Kind == "eof" {
+			return false
+		}
+		if a.tokens[i].Text == text {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Analyzer) isTypeKeyword() bool {

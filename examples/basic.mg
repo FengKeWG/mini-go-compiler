@@ -78,6 +78,11 @@ func main() int {
         break;
     }
 
+    /* for 三段式循环和自增语句 */
+    for i := 0; i < 3; i++ {
+        pair = pair + i;
+    }
+
     /* 数组下标、结构体字段、:= */
     scores[0] = a;
     stu.age = a;
