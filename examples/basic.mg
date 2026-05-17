@@ -78,9 +78,8 @@ func main() int {
         break;
     }
 
-    /* 数组下标、结构体字段、冒号、逗号、:= */
+    /* 数组下标、结构体字段、:= */
     scores[0] = a;
-    pair: a, b;
     stu.age = a;
     stu.name = msg;
     temp := rate;

@@ -213,7 +213,6 @@ func (p *Parser) parseReturnType() {
 // 以标识符开头的语句有多种形式：
 // <赋值语句> -> <左值> <赋值运算符> <表达式> ;
 // <函数调用语句> -> <函数调用> ;
-// <扩展语句> -> <标识符> : <表达式> { , <表达式> } ;
 func (p *Parser) parseIDStartStmt() {
 	// 标识符后面紧跟左括号，说明这是函数调用语句
 	if p.nextText("(") {
@@ -229,16 +228,7 @@ func (p *Parser) parseIDStartStmt() {
 		p.expectText(";")
 		return
 	}
-	// 这个分支主要用于当前示例中的 pair: a, b;，同时覆盖冒号和逗号的词法测试
-	if p.matchText(":") {
-		p.parseExpr()
-		for p.matchText(",") {
-			p.parseExpr()
-		}
-		p.expectText(";")
-		return
-	}
-	p.addError("标识符后面应为 =、:= 或 :")
+	p.addError("标识符后面应为 = 或 :=")
 	p.skipToStmtEnd()
 }
 

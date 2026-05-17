@@ -118,12 +118,6 @@ func (a *Analyzer) parseFuncDecl() {
 	a.expectKeyword("func")
 	nameTok := a.expectKind("i", "函数名")
 
-	// 保存外层状态，方便以后扩展嵌套函数时恢复环境
-	oldFuncName := a.currentFuncName
-	oldFuncReturn := a.currentFuncReturn
-	oldFuncHasReturn := a.currentFuncHasReturn
-	oldOffset := a.offset
-
 	// 进入新函数时，局部地址从活动记录固定区后面开始分配
 	a.currentFuncName = nameTok.Text
 	a.offset = localVarStartAddr
@@ -131,7 +125,7 @@ func (a *Analyzer) parseFuncDecl() {
 	a.expectText("(")
 	params := a.parseParamList()
 	a.expectText(")")
-	returnType := a.parseReturnType()
+	returnType := a.parseReturnType() // 分析返回类型
 	a.functions[nameTok.Text] = functionInfo{ReturnType: returnType, Params: params}
 	// 函数本身进入符号表，参数信息保存在 Value 字段中
 	a.enterSymbol(nameTok.Text, returnType, "f", formatParams(params))
@@ -151,12 +145,12 @@ func (a *Analyzer) parseFuncDecl() {
 		a.addError("函数 " + nameTok.Text + " 缺少 return 语句")
 	}
 
-	// 函数分析结束后恢复旧环境
-	a.currentFuncName = oldFuncName
-	a.currentFuncReturn = oldFuncReturn
-	a.currentFuncHasReturn = oldFuncHasReturn
-	a.offset = oldOffset
 	a.emit("end", nameTok.Text, "_", "_")
+	// 函数结束后回到顶层状态
+	a.currentFuncName = ""
+	a.currentFuncReturn = ""
+	a.currentFuncHasReturn = false
+	a.offset = localVarStartAddr
 }
 
 // <参数列表> -> <参数> { , <参数> } | ε
@@ -375,17 +369,7 @@ func (a *Analyzer) parseIDStartStmt() {
 		return
 	}
 
-	// 扩展语句只用于覆盖冒号和逗号的语法形式，不生成四元式
-	if a.matchText(":") {
-		a.parseExpr()
-		for a.matchText(",") {
-			a.parseExpr()
-		}
-		a.expectText(";")
-		return
-	}
-
-	a.addError("标识符后面应为 =、:= 或 :")
+	a.addError("标识符后面应为 = 或 :=")
 	a.skipToStmtEnd()
 }
 
